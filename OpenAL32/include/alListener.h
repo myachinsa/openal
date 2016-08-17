@@ -2,10 +2,26 @@
 #define _AL_LISTENER_H_
 
 #include "alMain.h"
+#include "alu.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+struct ALlistenerProps {
+    ATOMIC(ALfloat) Position[3];
+    ATOMIC(ALfloat) Velocity[3];
+    ATOMIC(ALfloat) Forward[3];
+    ATOMIC(ALfloat) Up[3];
+    ATOMIC(ALfloat) Gain;
+    ATOMIC(ALfloat) MetersPerUnit;
+
+    ATOMIC(ALfloat) DopplerFactor;
+    ATOMIC(ALfloat) DopplerVelocity;
+    ATOMIC(ALfloat) SpeedOfSound;
+
+    ATOMIC(struct ALlistenerProps*) next;
+};
 
 typedef struct ALlistener {
     volatile ALfloat Position[3];
@@ -15,11 +31,28 @@ typedef struct ALlistener {
     volatile ALfloat Gain;
     volatile ALfloat MetersPerUnit;
 
+    /* Pointer to the most recent property values that are awaiting an update.
+     */
+    ATOMIC(struct ALlistenerProps*) Update;
+
+    /* A linked list of unused property containers, free to use for future
+     * updates.
+     */
+    ATOMIC(struct ALlistenerProps*) FreeList;
+
     struct {
-        ALfloat Matrix[4][4];
-        ALfloat Velocity[3];
+        aluMatrixf Matrix;
+        aluVector  Velocity;
+
+        ALfloat Gain;
+        ALfloat MetersPerUnit;
+
+        ALfloat DopplerFactor;
+        ALfloat SpeedOfSound;
     } Params;
 } ALlistener;
+
+void UpdateListenerProps(ALCcontext *context);
 
 #ifdef __cplusplus
 }

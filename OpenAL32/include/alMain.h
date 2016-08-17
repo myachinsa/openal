@@ -6,6 +6,11 @@
 #include <stdarg.h>
 #include <assert.h>
 #include <math.h>
+#include <limits.h>
+
+#ifdef HAVE_STRINGS_H
+#include <strings.h>
+#endif
 
 #ifdef HAVE_FENV_H
 #include <fenv.h>
@@ -15,42 +20,173 @@
 #include "AL/alc.h"
 #include "AL/alext.h"
 
-#ifndef AL_SOFT_deferred_updates
-#define AL_SOFT_deferred_updates 1
-#define AL_DEFERRED_UPDATES_SOFT                 0xC002
-typedef ALvoid (AL_APIENTRY*LPALDEFERUPDATESSOFT)(void);
-typedef ALvoid (AL_APIENTRY*LPALPROCESSUPDATESSOFT)(void);
-#ifdef AL_ALEXT_PROTOTYPES
-AL_API ALvoid AL_APIENTRY alDeferUpdatesSOFT(void);
-AL_API ALvoid AL_APIENTRY alProcessUpdatesSOFT(void);
-#endif
-#endif
 
-
-#if defined(HAVE_STDINT_H)
-#include <stdint.h>
-typedef int64_t ALint64;
-typedef uint64_t ALuint64;
-#elif defined(HAVE___INT64)
-typedef __int64 ALint64;
-typedef unsigned __int64 ALuint64;
-#elif (SIZEOF_LONG == 8)
-typedef long ALint64;
-typedef unsigned long ALuint64;
-#elif (SIZEOF_LONG_LONG == 8)
-typedef long long ALint64;
-typedef unsigned long long ALuint64;
-#endif
-
-typedef ptrdiff_t ALintptrEXT;
-typedef ptrdiff_t ALsizeiptrEXT;
-
-#define MAKEU64(x,y) (((ALuint64)(x)<<32)|(ALuint64)(y))
-
-#ifdef HAVE_GCC_FORMAT
-#define PRINTF_STYLE(x, y) __attribute__((format(printf, (x), (y))))
+#if defined(_WIN64)
+#define SZFMT "%I64u"
+#elif defined(_WIN32)
+#define SZFMT "%u"
 #else
-#define PRINTF_STYLE(x, y)
+#define SZFMT "%zu"
+#endif
+
+
+#include "static_assert.h"
+#include "align.h"
+#include "atomic.h"
+#include "uintmap.h"
+#include "vector.h"
+#include "alstring.h"
+#include "almalloc.h"
+#include "threads.h"
+
+#include "hrtf.h"
+
+#ifndef ALC_SOFT_device_clock
+#define ALC_SOFT_device_clock 1
+typedef int64_t ALCint64SOFT;
+typedef uint64_t ALCuint64SOFT;
+#define ALC_DEVICE_CLOCK_SOFT                    0x1600
+#define ALC_DEVICE_LATENCY_SOFT                  0x1601
+#define ALC_DEVICE_CLOCK_LATENCY_SOFT            0x1602
+typedef void (ALC_APIENTRY*LPALCGETINTEGER64VSOFT)(ALCdevice *device, ALCenum pname, ALsizei size, ALCint64SOFT *values);
+#ifdef AL_ALEXT_PROTOTYPES
+ALC_API void ALC_APIENTRY alcGetInteger64vSOFT(ALCdevice *device, ALCenum pname, ALsizei size, ALCint64SOFT *values);
+#endif
+#endif
+
+#ifndef AL_SOFT_buffer_samples2
+#define AL_SOFT_buffer_samples2 1
+/* Channel configurations */
+#define AL_MONO_SOFT                             0x1500
+#define AL_STEREO_SOFT                           0x1501
+#define AL_REAR_SOFT                             0x1502
+#define AL_QUAD_SOFT                             0x1503
+#define AL_5POINT1_SOFT                          0x1504
+#define AL_6POINT1_SOFT                          0x1505
+#define AL_7POINT1_SOFT                          0x1506
+#define AL_BFORMAT2D_SOFT                        0x1507
+#define AL_BFORMAT3D_SOFT                        0x1508
+
+/* Sample types */
+#define AL_BYTE_SOFT                             0x1400
+#define AL_UNSIGNED_BYTE_SOFT                    0x1401
+#define AL_SHORT_SOFT                            0x1402
+#define AL_UNSIGNED_SHORT_SOFT                   0x1403
+#define AL_INT_SOFT                              0x1404
+#define AL_UNSIGNED_INT_SOFT                     0x1405
+#define AL_FLOAT_SOFT                            0x1406
+#define AL_DOUBLE_SOFT                           0x1407
+#define AL_BYTE3_SOFT                            0x1408
+#define AL_UNSIGNED_BYTE3_SOFT                   0x1409
+#define AL_MULAW_SOFT                            0x140A
+
+/* Storage formats */
+#define AL_MONO8_SOFT                            0x1100
+#define AL_MONO16_SOFT                           0x1101
+#define AL_MONO32F_SOFT                          0x10010
+#define AL_STEREO8_SOFT                          0x1102
+#define AL_STEREO16_SOFT                         0x1103
+#define AL_STEREO32F_SOFT                        0x10011
+#define AL_QUAD8_SOFT                            0x1204
+#define AL_QUAD16_SOFT                           0x1205
+#define AL_QUAD32F_SOFT                          0x1206
+#define AL_REAR8_SOFT                            0x1207
+#define AL_REAR16_SOFT                           0x1208
+#define AL_REAR32F_SOFT                          0x1209
+#define AL_5POINT1_8_SOFT                        0x120A
+#define AL_5POINT1_16_SOFT                       0x120B
+#define AL_5POINT1_32F_SOFT                      0x120C
+#define AL_6POINT1_8_SOFT                        0x120D
+#define AL_6POINT1_16_SOFT                       0x120E
+#define AL_6POINT1_32F_SOFT                      0x120F
+#define AL_7POINT1_8_SOFT                        0x1210
+#define AL_7POINT1_16_SOFT                       0x1211
+#define AL_7POINT1_32F_SOFT                      0x1212
+#define AL_BFORMAT2D_8_SOFT                      0x20021
+#define AL_BFORMAT2D_16_SOFT                     0x20022
+#define AL_BFORMAT2D_32F_SOFT                    0x20023
+#define AL_BFORMAT3D_8_SOFT                      0x20031
+#define AL_BFORMAT3D_16_SOFT                     0x20032
+#define AL_BFORMAT3D_32F_SOFT                    0x20033
+
+/* Buffer attributes */
+#define AL_INTERNAL_FORMAT_SOFT                  0x2008
+#define AL_BYTE_LENGTH_SOFT                      0x2009
+#define AL_SAMPLE_LENGTH_SOFT                    0x200A
+#define AL_SEC_LENGTH_SOFT                       0x200B
+
+#if 0
+typedef void (AL_APIENTRY*LPALBUFFERSAMPLESSOFT)(ALuint,ALuint,ALenum,ALsizei,ALenum,ALenum,const ALvoid*);
+typedef void (AL_APIENTRY*LPALGETBUFFERSAMPLESSOFT)(ALuint,ALsizei,ALsizei,ALenum,ALenum,ALvoid*);
+typedef ALboolean (AL_APIENTRY*LPALISBUFFERFORMATSUPPORTEDSOFT)(ALenum);
+#ifdef AL_ALEXT_PROTOTYPES
+AL_API void AL_APIENTRY alBufferSamplesSOFT(ALuint buffer, ALuint samplerate, ALenum internalformat, ALsizei samples, ALenum channels, ALenum type, const ALvoid *data);
+AL_API void AL_APIENTRY alGetBufferSamplesSOFT(ALuint buffer, ALsizei offset, ALsizei samples, ALenum channels, ALenum type, ALvoid *data);
+AL_API ALboolean AL_APIENTRY alIsBufferFormatSupportedSOFT(ALenum format);
+#endif
+#endif
+#endif
+
+
+typedef ALint64SOFT ALint64;
+typedef ALuint64SOFT ALuint64;
+
+#ifndef U64
+#if defined(_MSC_VER)
+#define U64(x) ((ALuint64)(x##ui64))
+#elif SIZEOF_LONG == 8
+#define U64(x) ((ALuint64)(x##ul))
+#elif SIZEOF_LONG_LONG == 8
+#define U64(x) ((ALuint64)(x##ull))
+#endif
+#endif
+
+#ifndef UINT64_MAX
+#define UINT64_MAX U64(18446744073709551615)
+#endif
+
+#ifndef UNUSED
+#if defined(__cplusplus)
+#define UNUSED(x)
+#elif defined(__GNUC__)
+#define UNUSED(x) UNUSED_##x __attribute__((unused))
+#elif defined(__LCLINT__)
+#define UNUSED(x) /*@unused@*/ x
+#else
+#define UNUSED(x) x
+#endif
+#endif
+
+#ifdef __GNUC__
+#define DECL_CONST __attribute__((const))
+#define DECL_FORMAT(x, y, z) __attribute__((format(x, (y), (z))))
+#else
+#define DECL_CONST
+#define DECL_FORMAT(x, y, z)
+#endif
+
+#if defined(__GNUC__) && defined(__i386__)
+/* force_align_arg_pointer is required for proper function arguments aligning
+ * when SSE code is used. Some systems (Windows, QNX) do not guarantee our
+ * thread functions will be properly aligned on the stack, even though GCC may
+ * generate code with the assumption that it is. */
+#define FORCE_ALIGN __attribute__((force_align_arg_pointer))
+#else
+#define FORCE_ALIGN
+#endif
+
+#ifdef HAVE_C99_VLA
+#define DECL_VLA(T, _name, _size)  T _name[(_size)]
+#else
+#define DECL_VLA(T, _name, _size)  T *_name = alloca((_size) * sizeof(T))
+#endif
+
+#ifndef PATH_MAX
+#ifdef MAX_PATH
+#define PATH_MAX MAX_PATH
+#else
+#define PATH_MAX 4096
+#endif
 #endif
 
 
@@ -62,274 +198,93 @@ static const union {
 
 #define COUNTOF(x) (sizeof((x))/sizeof((x)[0]))
 
-#ifdef _WIN32
 
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
-typedef DWORD pthread_key_t;
-int pthread_key_create(pthread_key_t *key, void (*callback)(void*));
-int pthread_key_delete(pthread_key_t key);
-void *pthread_getspecific(pthread_key_t key);
-int pthread_setspecific(pthread_key_t key, void *val);
-
-#define HAVE_DYNLOAD 1
-void *LoadLib(const char *name);
-void CloseLib(void *handle);
-void *GetSymbol(void *handle, const char *name);
-
-WCHAR *strdupW(const WCHAR *str);
-
-typedef LONG pthread_once_t;
-#define PTHREAD_ONCE_INIT 0
-void pthread_once(pthread_once_t *once, void (*callback)(void));
-
-static __inline int sched_yield(void)
-{ SwitchToThread(); return 0; }
-
+#define DERIVE_FROM_TYPE(t)          t t##_parent
+#define STATIC_CAST(to, obj)         (&(obj)->to##_parent)
+#ifdef __GNUC__
+#define STATIC_UPCAST(to, from, obj) __extension__({                          \
+    static_assert(__builtin_types_compatible_p(from, __typeof(*(obj))),       \
+                  "Invalid upcast object from type");                         \
+    (to*)((char*)(obj) - offsetof(to, from##_parent));                        \
+})
 #else
-
-#include <unistd.h>
-#include <assert.h>
-#include <pthread.h>
-#include <sys/time.h>
-#include <time.h>
-#include <errno.h>
-
-#define IsBadWritePtr(a,b) ((a) == NULL && (b) != 0)
-
-typedef pthread_mutex_t CRITICAL_SECTION;
-void InitializeCriticalSection(CRITICAL_SECTION *cs);
-void DeleteCriticalSection(CRITICAL_SECTION *cs);
-void EnterCriticalSection(CRITICAL_SECTION *cs);
-void LeaveCriticalSection(CRITICAL_SECTION *cs);
-
-ALuint timeGetTime(void);
-void Sleep(ALuint t);
-
-#if defined(HAVE_DLFCN_H)
-#define HAVE_DYNLOAD 1
-void *LoadLib(const char *name);
-void CloseLib(void *handle);
-void *GetSymbol(void *handle, const char *name);
+#define STATIC_UPCAST(to, from, obj) ((to*)((char*)(obj) - offsetof(to, from##_parent)))
 #endif
 
-#endif
+#define DECLARE_FORWARD(T1, T2, rettype, func)                                \
+rettype T1##_##func(T1 *obj)                                                  \
+{ return T2##_##func(STATIC_CAST(T2, obj)); }
 
-typedef void *volatile XchgPtr;
+#define DECLARE_FORWARD1(T1, T2, rettype, func, argtype1)                     \
+rettype T1##_##func(T1 *obj, argtype1 a)                                      \
+{ return T2##_##func(STATIC_CAST(T2, obj), a); }
 
-#if defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 1))
-typedef ALuint RefCount;
-static __inline RefCount IncrementRef(volatile RefCount *ptr)
-{ return __sync_add_and_fetch(ptr, 1); }
-static __inline RefCount DecrementRef(volatile RefCount *ptr)
-{ return __sync_sub_and_fetch(ptr, 1); }
+#define DECLARE_FORWARD2(T1, T2, rettype, func, argtype1, argtype2)           \
+rettype T1##_##func(T1 *obj, argtype1 a, argtype2 b)                          \
+{ return T2##_##func(STATIC_CAST(T2, obj), a, b); }
 
-static __inline int ExchangeInt(volatile int *ptr, int newval)
-{
-    return __sync_lock_test_and_set(ptr, newval);
-}
-static __inline void *ExchangePtr(XchgPtr *ptr, void *newval)
-{
-    return __sync_lock_test_and_set(ptr, newval);
-}
-static __inline ALboolean CompExchangeInt(volatile int *ptr, int oldval, int newval)
-{
-    return __sync_bool_compare_and_swap(ptr, oldval, newval);
-}
-static __inline ALboolean CompExchangePtr(XchgPtr *ptr, void *oldval, void *newval)
-{
-    return __sync_bool_compare_and_swap(ptr, oldval, newval);
-}
-
-#elif defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
-
-static __inline int xaddl(volatile int *dest, int incr)
-{
-    int ret;
-    __asm__ __volatile__("lock; xaddl %0,(%1)"
-                         : "=r" (ret)
-                         : "r" (dest), "0" (incr)
-                         : "memory");
-    return ret;
-}
-
-typedef int RefCount;
-static __inline RefCount IncrementRef(volatile RefCount *ptr)
-{ return xaddl(ptr, 1)+1; }
-static __inline RefCount DecrementRef(volatile RefCount *ptr)
-{ return xaddl(ptr, -1)-1; }
-
-static __inline int ExchangeInt(volatile int *dest, int newval)
-{
-    int ret;
-    __asm__ __volatile__("lock; xchgl %0,(%1)"
-                         : "=r" (ret)
-                         : "r" (dest), "0" (newval)
-                         : "memory");
-    return ret;
-}
-
-static __inline ALboolean CompExchangeInt(volatile int *dest, int oldval, int newval)
-{
-    int ret;
-    __asm__ __volatile__("lock; cmpxchgl %2,(%1)"
-                         : "=a" (ret)
-                         : "r" (dest), "r" (newval), "0" (oldval)
-                         : "memory");
-    return ret == oldval;
-}
-
-static __inline void *ExchangePtr(XchgPtr *dest, void *newval)
-{
-    void *ret;
-    __asm__ __volatile__(
-#ifdef __i386__
-                         "lock; xchgl %0,(%1)"
-#else
-                         "lock; xchgq %0,(%1)"
-#endif
-                         : "=r" (ret)
-                         : "r" (dest), "0" (newval)
-                         : "memory"
-    );
-    return ret;
-}
-
-static __inline ALboolean CompExchangePtr(XchgPtr *dest, void *oldval, void *newval)
-{
-    void *ret;
-    __asm__ __volatile__(
-#ifdef __i386__
-                         "lock; cmpxchgl %2,(%1)"
-#else
-                         "lock; cmpxchgq %2,(%1)"
-#endif
-                         : "=a" (ret)
-                         : "r" (dest), "r" (newval), "0" (oldval)
-                         : "memory"
-    );
-    return ret == oldval;
-}
-
-#elif defined(_WIN32)
-
-typedef LONG RefCount;
-static __inline RefCount IncrementRef(volatile RefCount *ptr)
-{ return InterlockedIncrement(ptr); }
-static __inline RefCount DecrementRef(volatile RefCount *ptr)
-{ return InterlockedDecrement(ptr); }
-
-extern ALbyte LONG_size_does_not_match_int[(sizeof(LONG)==sizeof(int))?1:-1];
-
-static __inline int ExchangeInt(volatile int *ptr, int newval)
-{
-    union {
-        volatile int *i;
-        volatile LONG *l;
-    } u = { ptr };
-    return InterlockedExchange(u.l, newval);
-}
-static __inline void *ExchangePtr(XchgPtr *ptr, void *newval)
-{
-    return InterlockedExchangePointer(ptr, newval);
-}
-static __inline ALboolean CompExchangeInt(volatile int *ptr, int oldval, int newval)
-{
-    union {
-        volatile int *i;
-        volatile LONG *l;
-    } u = { ptr };
-    return InterlockedCompareExchange(u.l, newval, oldval) == oldval;
-}
-static __inline ALboolean CompExchangePtr(XchgPtr *ptr, void *oldval, void *newval)
-{
-    return InterlockedCompareExchangePointer(ptr, newval, oldval) == oldval;
-}
-
-#elif defined(__APPLE__)
-
-#include <libkern/OSAtomic.h>
-
-typedef int32_t RefCount;
-static __inline RefCount IncrementRef(volatile RefCount *ptr)
-{ return OSAtomicIncrement32Barrier(ptr); }
-static __inline RefCount DecrementRef(volatile RefCount *ptr)
-{ return OSAtomicDecrement32Barrier(ptr); }
-
-static __inline int ExchangeInt(volatile int *ptr, int newval)
-{
-    /* Really? No regular old atomic swap? */
-    int oldval;
-    do {
-        oldval = *ptr;
-    } while(!OSAtomicCompareAndSwap32Barrier(oldval, newval, ptr));
-    return oldval;
-}
-static __inline void *ExchangePtr(XchgPtr *ptr, void *newval)
-{
-    void *oldval;
-    do {
-        oldval = *ptr;
-    } while(!OSAtomicCompareAndSwapPtrBarrier(oldval, newval, ptr));
-    return oldval;
-}
-static __inline ALboolean CompExchangeInt(volatile int *ptr, int oldval, int newval)
-{
-    return OSAtomicCompareAndSwap32Barrier(oldval, newval, ptr);
-}
-static __inline ALboolean CompExchangePtr(XchgPtr *ptr, void *oldval, void *newval)
-{
-    return OSAtomicCompareAndSwapPtrBarrier(oldval, newval, ptr);
-}
-
-#else
-#error "No atomic functions available on this platform!"
-typedef ALuint RefCount;
-#endif
+#define DECLARE_FORWARD3(T1, T2, rettype, func, argtype1, argtype2, argtype3) \
+rettype T1##_##func(T1 *obj, argtype1 a, argtype2 b, argtype3 c)              \
+{ return T2##_##func(STATIC_CAST(T2, obj), a, b, c); }
 
 
-typedef struct {
-    volatile RefCount read_count;
-    volatile RefCount write_count;
-    volatile ALenum read_lock;
-    volatile ALenum read_entry_lock;
-    volatile ALenum write_lock;
-} RWLock;
+#define GET_VTABLE1(T1)     (&(T1##_vtable))
+#define GET_VTABLE2(T1, T2) (&(T1##_##T2##_vtable))
 
-void RWLockInit(RWLock *lock);
-void ReadLock(RWLock *lock);
-void ReadUnlock(RWLock *lock);
-void WriteLock(RWLock *lock);
-void WriteUnlock(RWLock *lock);
+#define SET_VTABLE1(T1, obj)     ((obj)->vtbl = GET_VTABLE1(T1))
+#define SET_VTABLE2(T1, T2, obj) (STATIC_CAST(T2, obj)->vtbl = GET_VTABLE2(T1, T2))
+
+#define DECLARE_THUNK(T1, T2, rettype, func)                                  \
+static rettype T1##_##T2##_##func(T2 *obj)                                    \
+{ return T1##_##func(STATIC_UPCAST(T1, T2, obj)); }
+
+#define DECLARE_THUNK1(T1, T2, rettype, func, argtype1)                       \
+static rettype T1##_##T2##_##func(T2 *obj, argtype1 a)                        \
+{ return T1##_##func(STATIC_UPCAST(T1, T2, obj), a); }
+
+#define DECLARE_THUNK2(T1, T2, rettype, func, argtype1, argtype2)             \
+static rettype T1##_##T2##_##func(T2 *obj, argtype1 a, argtype2 b)            \
+{ return T1##_##func(STATIC_UPCAST(T1, T2, obj), a, b); }
+
+#define DECLARE_THUNK3(T1, T2, rettype, func, argtype1, argtype2, argtype3)   \
+static rettype T1##_##T2##_##func(T2 *obj, argtype1 a, argtype2 b, argtype3 c) \
+{ return T1##_##func(STATIC_UPCAST(T1, T2, obj), a, b, c); }
+
+#define DECLARE_THUNK4(T1, T2, rettype, func, argtype1, argtype2, argtype3, argtype4) \
+static rettype T1##_##T2##_##func(T2 *obj, argtype1 a, argtype2 b, argtype3 c, argtype4 d) \
+{ return T1##_##func(STATIC_UPCAST(T1, T2, obj), a, b, c, d); }
+
+#define DECLARE_DEFAULT_ALLOCATORS(T)                                         \
+static void* T##_New(size_t size) { return al_malloc(16, size); }             \
+static void T##_Delete(void *ptr) { al_free(ptr); }
+
+/* Helper to extract an argument list for VCALL. Not used directly. */
+#define EXTRACT_VCALL_ARGS(...)  __VA_ARGS__))
+
+/* Call a "virtual" method on an object, with arguments. */
+#define V(obj, func)  ((obj)->vtbl->func((obj), EXTRACT_VCALL_ARGS
+/* Call a "virtual" method on an object, with no arguments. */
+#define V0(obj, func) ((obj)->vtbl->func((obj) EXTRACT_VCALL_ARGS
+
+#define DELETE_OBJ(obj) do {                                                  \
+    if((obj) != NULL)                                                         \
+    {                                                                         \
+        V0((obj),Destruct)();                                                 \
+        V0((obj),Delete)();                                                   \
+    }                                                                         \
+} while(0)
 
 
-typedef struct UIntMap {
-    struct {
-        ALuint key;
-        ALvoid *value;
-    } *array;
-    ALsizei size;
-    ALsizei maxsize;
-    ALsizei limit;
-    RWLock lock;
-} UIntMap;
-extern UIntMap TlsDestructor;
+#define EXTRACT_NEW_ARGS(...)  __VA_ARGS__);                                  \
+    }                                                                         \
+} while(0)
 
-void InitUIntMap(UIntMap *map, ALsizei limit);
-void ResetUIntMap(UIntMap *map);
-ALenum InsertUIntMapEntry(UIntMap *map, ALuint key, ALvoid *value);
-ALvoid *RemoveUIntMapKey(UIntMap *map, ALuint key);
-ALvoid *LookupUIntMapKey(UIntMap *map, ALuint key);
-
-static __inline void LockUIntMapRead(UIntMap *map)
-{ ReadLock(&map->lock); }
-static __inline void UnlockUIntMapRead(UIntMap *map)
-{ ReadUnlock(&map->lock); }
-static __inline void LockUIntMapWrite(UIntMap *map)
-{ WriteLock(&map->lock); }
-static __inline void UnlockUIntMapWrite(UIntMap *map)
-{ WriteUnlock(&map->lock); }
+#define NEW_OBJ(_res, T) do {                                                 \
+    _res = T##_New(sizeof(T));                                                \
+    if(_res)                                                                  \
+    {                                                                         \
+        memset(_res, 0, sizeof(T));                                           \
+        T##_Construct(_res, EXTRACT_NEW_ARGS
 
 
 #ifdef __cplusplus
@@ -343,8 +298,8 @@ struct Hrtf;
 #define MIN_OUTPUT_RATE      (8000)
 
 
-// Find the next power-of-2 for non-power-of-2 numbers.
-static __inline ALuint NextPowerOf2(ALuint value)
+/* Find the next power-of-2 for non-power-of-2 numbers. */
+inline ALuint NextPowerOf2(ALuint value)
 {
     if(value > 0)
     {
@@ -360,7 +315,7 @@ static __inline ALuint NextPowerOf2(ALuint value)
 
 /* Fast float-to-int conversion. Assumes the FPU is already in round-to-zero
  * mode. */
-static __inline ALint fastf2i(ALfloat f)
+inline ALint fastf2i(ALfloat f)
 {
 #ifdef HAVE_LRINTF
     return lrintf(f);
@@ -376,7 +331,7 @@ static __inline ALint fastf2i(ALfloat f)
 
 /* Fast float-to-uint conversion. Assumes the FPU is already in round-to-zero
  * mode. */
-static __inline ALuint fastf2u(ALfloat f)
+inline ALuint fastf2u(ALfloat f)
 { return fastf2i(f); }
 
 
@@ -398,63 +353,22 @@ typedef struct {
     void (*StopCapture)(ALCdevice*);
     ALCenum (*CaptureSamples)(ALCdevice*, void*, ALCuint);
     ALCuint (*AvailableSamples)(ALCdevice*);
-
-    void (*Lock)(ALCdevice*);
-    void (*Unlock)(ALCdevice*);
-
-    ALint64 (*GetLatency)(ALCdevice*);
 } BackendFuncs;
 
-struct BackendInfo {
-    const char *name;
-    ALCboolean (*Init)(BackendFuncs*);
-    void (*Deinit)(void);
-    void (*Probe)(enum DevProbe);
-    BackendFuncs Funcs;
-};
-
-ALCboolean alc_alsa_init(BackendFuncs *func_list);
-void alc_alsa_deinit(void);
-void alc_alsa_probe(enum DevProbe type);
-ALCboolean alc_oss_init(BackendFuncs *func_list);
-void alc_oss_deinit(void);
-void alc_oss_probe(enum DevProbe type);
-ALCboolean alc_solaris_init(BackendFuncs *func_list);
-void alc_solaris_deinit(void);
-void alc_solaris_probe(enum DevProbe type);
 ALCboolean alc_sndio_init(BackendFuncs *func_list);
 void alc_sndio_deinit(void);
 void alc_sndio_probe(enum DevProbe type);
-ALCboolean alcMMDevApiInit(BackendFuncs *func_list);
-void alcMMDevApiDeinit(void);
-void alcMMDevApiProbe(enum DevProbe type);
-ALCboolean alcDSoundInit(BackendFuncs *func_list);
-void alcDSoundDeinit(void);
-void alcDSoundProbe(enum DevProbe type);
-ALCboolean alcWinMMInit(BackendFuncs *FuncList);
-void alcWinMMDeinit(void);
-void alcWinMMProbe(enum DevProbe type);
-ALCboolean alc_pa_init(BackendFuncs *func_list);
-void alc_pa_deinit(void);
-void alc_pa_probe(enum DevProbe type);
-ALCboolean alc_wave_init(BackendFuncs *func_list);
-void alc_wave_deinit(void);
-void alc_wave_probe(enum DevProbe type);
-ALCboolean alc_pulse_init(BackendFuncs *func_list);
-void alc_pulse_deinit(void);
-void alc_pulse_probe(enum DevProbe type);
 ALCboolean alc_ca_init(BackendFuncs *func_list);
 void alc_ca_deinit(void);
 void alc_ca_probe(enum DevProbe type);
 ALCboolean alc_opensl_init(BackendFuncs *func_list);
 void alc_opensl_deinit(void);
 void alc_opensl_probe(enum DevProbe type);
-ALCboolean alc_null_init(BackendFuncs *func_list);
-void alc_null_deinit(void);
-void alc_null_probe(enum DevProbe type);
-ALCboolean alc_loopback_init(BackendFuncs *func_list);
-void alc_loopback_deinit(void);
-void alc_loopback_probe(enum DevProbe type);
+ALCboolean alc_qsa_init(BackendFuncs *func_list);
+void alc_qsa_deinit(void);
+void alc_qsa_probe(enum DevProbe type);
+
+struct ALCbackend;
 
 
 enum DistanceModel {
@@ -469,14 +383,6 @@ enum DistanceModel {
     DefaultDistanceModel = InverseDistanceClamped
 };
 
-enum Resampler {
-    PointResampler,
-    LinearResampler,
-    CubicResampler,
-
-    ResamplerMax,
-};
-
 enum Channel {
     FrontLeft = 0,
     FrontRight,
@@ -488,7 +394,33 @@ enum Channel {
     SideLeft,
     SideRight,
 
-    MaxChannels,
+    UpperFrontLeft,
+    UpperFrontRight,
+    UpperBackLeft,
+    UpperBackRight,
+    LowerFrontLeft,
+    LowerFrontRight,
+    LowerBackLeft,
+    LowerBackRight,
+
+    Aux0,
+    Aux1,
+    Aux2,
+    Aux3,
+    Aux4,
+    Aux5,
+    Aux6,
+    Aux7,
+    Aux8,
+    Aux9,
+    Aux10,
+    Aux11,
+    Aux12,
+    Aux13,
+    Aux14,
+    Aux15,
+
+    InvalidChannel
 };
 
 
@@ -512,19 +444,32 @@ enum DevFmtChannels {
     DevFmtX61    = ALC_6POINT1_SOFT,
     DevFmtX71    = ALC_7POINT1_SOFT,
 
-    /* Similar to 5.1, except using the side channels instead of back */
-    DevFmtX51Side = 0x80000000,
+    /* Similar to 5.1, except using rear channels instead of sides */
+    DevFmtX51Rear = 0x80000000,
+
+    /* Ambisonic formats should be kept together */
+    DevFmtAmbi1,
+    DevFmtAmbi2,
+    DevFmtAmbi3,
 
     DevFmtChannelsDefault = DevFmtStereo
 };
+#define MAX_OUTPUT_CHANNELS  (16)
 
-ALuint BytesFromDevFmt(enum DevFmtType type);
-ALuint ChannelsFromDevFmt(enum DevFmtChannels chans);
-static __inline ALuint FrameSizeFromDevFmt(enum DevFmtChannels chans,
-                                           enum DevFmtType type)
+ALuint BytesFromDevFmt(enum DevFmtType type) DECL_CONST;
+ALuint ChannelsFromDevFmt(enum DevFmtChannels chans) DECL_CONST;
+inline ALuint FrameSizeFromDevFmt(enum DevFmtChannels chans, enum DevFmtType type)
 {
     return ChannelsFromDevFmt(chans) * BytesFromDevFmt(type);
 }
+
+enum AmbiFormat {
+    AmbiFormat_FuMa,     /* FuMa channel order and normalization */
+    AmbiFormat_ACN_SN3D, /* ACN channel order and SN3D normalization */
+    AmbiFormat_ACN_N3D,  /* ACN channel order and N3D normalization */
+
+    AmbiFormat_Default = AmbiFormat_ACN_SN3D
+};
 
 
 extern const struct EffectList {
@@ -542,48 +487,101 @@ enum DeviceType {
 };
 
 
+enum RenderMode {
+    NormalRender,
+    StereoPair,
+    HrtfRender
+};
+
+
+/* The maximum number of Ambisonics coefficients. For a given order (o), the
+ * size needed will be (o+1)**2, thus zero-order has 1, first-order has 4,
+ * second-order has 9, third-order has 16, and fourth-order has 25.
+ */
+#define MAX_AMBI_ORDER  3
+#define MAX_AMBI_COEFFS ((MAX_AMBI_ORDER+1) * (MAX_AMBI_ORDER+1))
+
+/* A bitmask of ambisonic channels with height information. If none of these
+ * channels are used/needed, there's no height (e.g. with most surround sound
+ * speaker setups). This only specifies up to 4th order, which is the highest
+ * order a 32-bit mask value can specify (a 64-bit mask could handle up to 7th
+ * order). This is ACN ordering, with bit 0 being ACN 0, etc.
+ */
+#define AMBI_PERIPHONIC_MASK (0xfe7ce4)
+
+/* The maximum number of Ambisonic coefficients for 2D (non-periphonic)
+ * representation. This is 2 per each order above zero-order, plus 1 for zero-
+ * order. Or simply, o*2 + 1.
+ */
+#define MAX_AMBI2D_COEFFS (MAX_AMBI_ORDER*2 + 1)
+
+
+typedef ALfloat ChannelConfig[MAX_AMBI_COEFFS];
+typedef struct BFChannelConfig {
+    ALfloat Scale;
+    ALuint Index;
+} BFChannelConfig;
+
+typedef union AmbiConfig {
+    /* Ambisonic coefficients for mixing to the dry buffer. */
+    ChannelConfig Coeffs[MAX_OUTPUT_CHANNELS];
+    /* Coefficient channel mapping for mixing to the dry buffer. */
+    BFChannelConfig Map[MAX_OUTPUT_CHANNELS];
+} AmbiConfig;
+
+
+#define HRTF_HISTORY_BITS   (6)
+#define HRTF_HISTORY_LENGTH (1<<HRTF_HISTORY_BITS)
+#define HRTF_HISTORY_MASK   (HRTF_HISTORY_LENGTH-1)
+
+typedef struct HrtfState {
+    alignas(16) ALfloat History[HRTF_HISTORY_LENGTH];
+    alignas(16) ALfloat Values[HRIR_LENGTH][2];
+} HrtfState;
+
+typedef struct HrtfParams {
+    alignas(16) ALfloat Coeffs[HRIR_LENGTH][2];
+    ALuint Delay[2];
+} HrtfParams;
+
+
 /* Size for temporary storage of buffer data, in ALfloats. Larger values need
  * more memory, while smaller values may need more iterations. The value needs
  * to be a sensible size, however, as it constrains the max stepping value used
  * for mixing, as well as the maximum number of samples per mixing iteration.
- *
- * The mixer requires being able to do two samplings per mixing loop. With the
- * cubic resampler (which requires 3 padding samples), this limits a 2048
- * buffer size to about 2044. This means that buffer_freq*source_pitch cannot
- * exceed device_freq*2044 for a 32-bit buffer.
  */
-#ifndef BUFFERSIZE
-#define BUFFERSIZE 2048
-#endif
-
+#define BUFFERSIZE (2048u)
 
 struct ALCdevice_struct
 {
-    volatile RefCount ref;
+    RefCount ref;
 
     ALCboolean Connected;
     enum DeviceType Type;
 
-    CRITICAL_SECTION Mutex;
-
-    ALuint       Frequency;
-    ALuint       UpdateSize;
-    ALuint       NumUpdates;
+    ALuint Frequency;
+    ALuint UpdateSize;
+    ALuint NumUpdates;
     enum DevFmtChannels FmtChans;
     enum DevFmtType     FmtType;
+    ALboolean IsHeadphones;
+    /* For DevFmtAmbi* output only, specifies the channel order and
+     * normalization.
+     */
+    enum AmbiFormat AmbiFmt;
 
-    ALCchar      *DeviceName;
+    al_string DeviceName;
 
-    volatile ALCenum LastError;
+    ATOMIC(ALCenum) LastError;
 
     // Maximum number of sources that can be created
-    ALuint       MaxNoOfSources;
+    ALuint SourcesMax;
     // Maximum number of slots that can be created
-    ALuint       AuxiliaryEffectSlotMax;
+    ALuint AuxiliaryEffectSlotMax;
 
-    ALCuint      NumMonoSources;
-    ALCuint      NumStereoSources;
-    ALuint       NumAuxSends;
+    ALCuint NumMonoSources;
+    ALCuint NumStereoSources;
+    ALuint  NumAuxSends;
 
     // Map of Buffers for this device
     UIntMap BufferMap;
@@ -595,57 +593,99 @@ struct ALCdevice_struct
     UIntMap FilterMap;
 
     /* HRTF filter tables */
+    vector_HrtfEntry Hrtf_List;
+    al_string Hrtf_Name;
     const struct Hrtf *Hrtf;
+    ALCenum Hrtf_Status;
 
-    // Stereo-to-binaural filter
+    /* HRTF filter state for dry buffer content */
+    alignas(16) ALfloat Hrtf_Values[4][HRIR_LENGTH][2];
+    alignas(16) ALfloat Hrtf_Coeffs[4][HRIR_LENGTH][2];
+    ALuint Hrtf_Offset;
+    ALuint Hrtf_IrSize;
+
+    /* UHJ encoder state */
+    struct Uhj2Encoder *Uhj_Encoder;
+
+    /* High quality Ambisonic decoder */
+    struct BFormatDec *AmbiDecoder;
+
+    /* Stereo-to-binaural filter */
     struct bs2b *Bs2b;
-    ALCint       Bs2bLevel;
+
+    /* First-order ambisonic upsampler for higher-order output */
+    struct AmbiUpsampler *AmbiUp;
+
+    /* Rendering mode. */
+    enum RenderMode Render_Mode;
 
     // Device flags
-    ALuint       Flags;
+    ALuint Flags;
 
-    ALuint ChannelOffsets[MaxChannels];
+    ALuint64 ClockBase;
+    ALuint SamplesDone;
 
-    enum Channel Speaker2Chan[MaxChannels];
-    ALfloat SpeakerAngle[MaxChannels];
-    ALuint  NumChan;
+    /* Temp storage used for each source when mixing. */
+    alignas(16) ALfloat SourceData[BUFFERSIZE];
+    alignas(16) ALfloat ResampledData[BUFFERSIZE];
+    alignas(16) ALfloat FilteredData[BUFFERSIZE];
 
-    /* Temp storage used for mixing. +1 for the predictive sample. */
-    ALIGN(16) ALfloat SampleData1[BUFFERSIZE+1];
-    ALIGN(16) ALfloat SampleData2[BUFFERSIZE+1];
+    /* The "dry" path corresponds to the main output. */
+    struct {
+        AmbiConfig Ambi;
+        /* Number of coefficients in each Ambi.Coeffs to mix together (4 for
+         * first-order, 9 for second-order, etc). If the count is 0, Ambi.Map
+         * is used instead to map each output to a coefficient index.
+         */
+        ALuint CoeffCount;
 
-    // Dry path buffer mix
-    ALIGN(16) ALfloat DryBuffer[MaxChannels][BUFFERSIZE];
+        ALfloat (*Buffer)[BUFFERSIZE];
+        ALuint NumChannels;
+    } Dry;
 
-    ALIGN(16) ALfloat ClickRemoval[MaxChannels];
-    ALIGN(16) ALfloat PendingClicks[MaxChannels];
+    /* First-order ambisonics output, to be upsampled to the dry buffer if different. */
+    struct {
+        AmbiConfig Ambi;
+        /* Will only be 4 or 0. */
+        ALuint CoeffCount;
+
+        ALfloat (*Buffer)[BUFFERSIZE];
+        ALuint NumChannels;
+    } FOAOut;
+
+    /* "Real" output, which will be written to the device buffer. May alias the
+     * dry buffer.
+     */
+    struct {
+        enum Channel ChannelName[MAX_OUTPUT_CHANNELS];
+
+        ALfloat (*Buffer)[BUFFERSIZE];
+        ALuint NumChannels;
+    } RealOut;
+
+    /* Running count of the mixer invocations, in 31.1 fixed point. This
+     * actually increments *twice* when mixing, first at the start and then at
+     * the end, so the bottom bit indicates if the device is currently mixing
+     * and the upper bits indicates how many mixes have been done.
+     */
+    RefCount MixCount;
 
     /* Default effect slot */
     struct ALeffectslot *DefaultSlot;
 
     // Contexts created on this device
-    ALCcontext *volatile ContextList;
+    ATOMIC(ALCcontext*) ContextList;
 
-    BackendFuncs *Funcs;
-    void         *ExtraData; // For the backend's use
+    almtx_t BackendLock;
+    struct ALCbackend *Backend;
+
+    void *ExtraData; // For the backend's use
 
     ALCdevice *volatile next;
-};
 
-#define ALCdevice_OpenPlayback(a,b)      ((a)->Funcs->OpenPlayback((a), (b)))
-#define ALCdevice_ClosePlayback(a)       ((a)->Funcs->ClosePlayback((a)))
-#define ALCdevice_ResetPlayback(a)       ((a)->Funcs->ResetPlayback((a)))
-#define ALCdevice_StartPlayback(a)       ((a)->Funcs->StartPlayback((a)))
-#define ALCdevice_StopPlayback(a)        ((a)->Funcs->StopPlayback((a)))
-#define ALCdevice_OpenCapture(a,b)       ((a)->Funcs->OpenCapture((a), (b)))
-#define ALCdevice_CloseCapture(a)        ((a)->Funcs->CloseCapture((a)))
-#define ALCdevice_StartCapture(a)        ((a)->Funcs->StartCapture((a)))
-#define ALCdevice_StopCapture(a)         ((a)->Funcs->StopCapture((a)))
-#define ALCdevice_CaptureSamples(a,b,c)  ((a)->Funcs->CaptureSamples((a), (b), (c)))
-#define ALCdevice_AvailableSamples(a)    ((a)->Funcs->AvailableSamples((a)))
-#define ALCdevice_Lock(a)                ((a)->Funcs->Lock((a)))
-#define ALCdevice_Unlock(a)              ((a)->Funcs->Unlock((a)))
-#define ALCdevice_GetLatency(a)          ((a)->Funcs->GetLatency((a)))
+    /* Memory space used by the default slot (Playback devices only) */
+    alignas(16) ALCbyte _slot_mem[];
+};
 
 // Frequency was requested by the app or config file
 #define DEVICE_FREQUENCY_REQUEST                 (1<<1)
@@ -654,36 +694,33 @@ struct ALCdevice_struct
 // Sample type was requested by the config file
 #define DEVICE_SAMPLE_TYPE_REQUEST               (1<<3)
 
-// Stereo sources cover 120-degree angles around +/-90
-#define DEVICE_WIDE_STEREO                       (1<<16)
+// Specifies if the DSP is paused at user request
+#define DEVICE_PAUSED                            (1<<30)
 
 // Specifies if the device is currently running
 #define DEVICE_RUNNING                           (1<<31)
 
-/* Invalid channel offset */
-#define INVALID_OFFSET                           (~0u)
+
+/* Nanosecond resolution for the device clock time. */
+#define DEVICE_CLOCK_RES  U64(1000000000)
 
 
-#define LookupBuffer(m, k) ((struct ALbuffer*)LookupUIntMapKey(&(m)->BufferMap, (k)))
-#define LookupEffect(m, k) ((struct ALeffect*)LookupUIntMapKey(&(m)->EffectMap, (k)))
-#define LookupFilter(m, k) ((struct ALfilter*)LookupUIntMapKey(&(m)->FilterMap, (k)))
-#define RemoveBuffer(m, k) ((struct ALbuffer*)RemoveUIntMapKey(&(m)->BufferMap, (k)))
-#define RemoveEffect(m, k) ((struct ALeffect*)RemoveUIntMapKey(&(m)->EffectMap, (k)))
-#define RemoveFilter(m, k) ((struct ALfilter*)RemoveUIntMapKey(&(m)->FilterMap, (k)))
+/* Must be less than 15 characters (16 including terminating null) for
+ * compatibility with pthread_setname_np limitations. */
+#define MIXER_THREAD_NAME "alsoft-mixer"
+
+#define RECORD_THREAD_NAME "alsoft-record"
 
 
-struct ALCcontext_struct
-{
-    volatile RefCount ref;
+struct ALCcontext_struct {
+    RefCount ref;
 
     struct ALlistener *Listener;
 
     UIntMap SourceMap;
     UIntMap EffectSlotMap;
 
-    ALenum LastError;
-
-    volatile ALenum UpdateSources;
+    ATOMIC(ALenum) LastError;
 
     volatile enum DistanceModel DistanceModel;
     volatile ALboolean SourceDistanceModel;
@@ -691,27 +728,30 @@ struct ALCcontext_struct
     volatile ALfloat DopplerFactor;
     volatile ALfloat DopplerVelocity;
     volatile ALfloat SpeedOfSound;
-    volatile ALenum  DeferUpdates;
+    ATOMIC(ALenum) DeferUpdates;
 
-    struct ALsource **ActiveSources;
-    ALsizei           ActiveSourceCount;
-    ALsizei           MaxActiveSources;
+    RWLock PropLock;
 
-    struct ALeffectslot **ActiveEffectSlots;
-    ALsizei               ActiveEffectSlotCount;
-    ALsizei               MaxActiveEffectSlots;
+    /* Counter for the pre-mixing updates, in 31.1 fixed point (lowest bit
+     * indicates if updates are currently happening).
+     */
+    RefCount UpdateCount;
+    ATOMIC(ALenum) HoldUpdates;
+
+    struct ALvoice *Voices;
+    ALsizei VoiceCount;
+    ALsizei MaxVoices;
+
+    ATOMIC(struct ALeffectslot*) ActiveAuxSlotList;
 
     ALCdevice  *Device;
     const ALCchar *ExtensionList;
 
     ALCcontext *volatile next;
+
+    /* Memory space used by the listener */
+    alignas(16) ALCbyte _listener_mem[];
 };
-
-#define LookupSource(m, k) ((struct ALsource*)LookupUIntMapKey(&(m)->SourceMap, (k)))
-#define LookupEffectSlot(m, k) ((struct ALeffectslot*)LookupUIntMapKey(&(m)->EffectSlotMap, (k)))
-#define RemoveSource(m, k) ((struct ALsource*)RemoveUIntMapKey(&(m)->SourceMap, (k)))
-#define RemoveEffectSlot(m, k) ((struct ALeffectslot*)RemoveUIntMapKey(&(m)->EffectSlotMap, (k)))
-
 
 ALCcontext *GetContextRef(void);
 
@@ -721,22 +761,25 @@ void ALCcontext_DecRef(ALCcontext *context);
 void AppendAllDevicesList(const ALCchar *name);
 void AppendCaptureDeviceList(const ALCchar *name);
 
-void ALCdevice_LockDefault(ALCdevice *device);
-void ALCdevice_UnlockDefault(ALCdevice *device);
-ALint64 ALCdevice_GetLatencyDefault(ALCdevice *device);
+void ALCdevice_Lock(ALCdevice *device);
+void ALCdevice_Unlock(ALCdevice *device);
 
-static __inline void LockContext(ALCcontext *context)
+void ALCcontext_DeferUpdates(ALCcontext *context);
+void ALCcontext_ProcessUpdates(ALCcontext *context);
+
+inline void LockContext(ALCcontext *context)
 { ALCdevice_Lock(context->Device); }
-static __inline void UnlockContext(ALCcontext *context)
+
+inline void UnlockContext(ALCcontext *context)
 { ALCdevice_Unlock(context->Device); }
 
 
-void *al_malloc(size_t alignment, size_t size);
-void *al_calloc(size_t alignment, size_t size);
-void al_free(void *ptr);
-
 typedef struct {
+#ifdef HAVE_FENV_H
+    DERIVE_FROM_TYPE(fenv_t);
+#else
     int state;
+#endif
 #ifdef HAVE_SSE
     int sse_state;
 #endif
@@ -744,51 +787,72 @@ typedef struct {
 void SetMixerFPUMode(FPUCtl *ctl);
 void RestoreFPUMode(const FPUCtl *ctl);
 
-ALvoid *StartThread(ALuint (*func)(ALvoid*), ALvoid *ptr);
-ALuint StopThread(ALvoid *thread);
 
-typedef struct RingBuffer RingBuffer;
-RingBuffer *CreateRingBuffer(ALsizei frame_size, ALsizei length);
-void DestroyRingBuffer(RingBuffer *ring);
-ALsizei RingBufferSize(RingBuffer *ring);
-void WriteRingBuffer(RingBuffer *ring, const ALubyte *data, ALsizei len);
-void ReadRingBuffer(RingBuffer *ring, ALubyte *data, ALsizei len);
+typedef struct ll_ringbuffer ll_ringbuffer_t;
+typedef struct ll_ringbuffer_data {
+    char *buf;
+    size_t len;
+} ll_ringbuffer_data_t;
+ll_ringbuffer_t *ll_ringbuffer_create(size_t sz, size_t elem_sz);
+void ll_ringbuffer_free(ll_ringbuffer_t *rb);
+void ll_ringbuffer_get_read_vector(const ll_ringbuffer_t *rb, ll_ringbuffer_data_t *vec);
+void ll_ringbuffer_get_write_vector(const ll_ringbuffer_t *rb, ll_ringbuffer_data_t *vec);
+size_t ll_ringbuffer_read(ll_ringbuffer_t *rb, char *dest, size_t cnt);
+size_t ll_ringbuffer_peek(ll_ringbuffer_t *rb, char *dest, size_t cnt);
+void ll_ringbuffer_read_advance(ll_ringbuffer_t *rb, size_t cnt);
+size_t ll_ringbuffer_read_space(const ll_ringbuffer_t *rb);
+int ll_ringbuffer_mlock(ll_ringbuffer_t *rb);
+void ll_ringbuffer_reset(ll_ringbuffer_t *rb);
+size_t ll_ringbuffer_write(ll_ringbuffer_t *rb, const char *src, size_t cnt);
+void ll_ringbuffer_write_advance(ll_ringbuffer_t *rb, size_t cnt);
+size_t ll_ringbuffer_write_space(const ll_ringbuffer_t *rb);
 
 void ReadALConfig(void);
 void FreeALConfig(void);
-int ConfigValueExists(const char *blockName, const char *keyName);
-const char *GetConfigValue(const char *blockName, const char *keyName, const char *def);
-int GetConfigValueBool(const char *blockName, const char *keyName, int def);
-int ConfigValueStr(const char *blockName, const char *keyName, const char **ret);
-int ConfigValueInt(const char *blockName, const char *keyName, int *ret);
-int ConfigValueUInt(const char *blockName, const char *keyName, unsigned int *ret);
-int ConfigValueFloat(const char *blockName, const char *keyName, float *ret);
+int ConfigValueExists(const char *devName, const char *blockName, const char *keyName);
+const char *GetConfigValue(const char *devName, const char *blockName, const char *keyName, const char *def);
+int GetConfigValueBool(const char *devName, const char *blockName, const char *keyName, int def);
+int ConfigValueStr(const char *devName, const char *blockName, const char *keyName, const char **ret);
+int ConfigValueInt(const char *devName, const char *blockName, const char *keyName, int *ret);
+int ConfigValueUInt(const char *devName, const char *blockName, const char *keyName, unsigned int *ret);
+int ConfigValueFloat(const char *devName, const char *blockName, const char *keyName, float *ret);
+int ConfigValueBool(const char *devName, const char *blockName, const char *keyName, int *ret);
 
 void SetRTPriority(void);
 
 void SetDefaultChannelOrder(ALCdevice *device);
 void SetDefaultWFXChannelOrder(ALCdevice *device);
 
-const ALCchar *DevFmtTypeString(enum DevFmtType type);
-const ALCchar *DevFmtChannelsString(enum DevFmtChannels chans);
+const ALCchar *DevFmtTypeString(enum DevFmtType type) DECL_CONST;
+const ALCchar *DevFmtChannelsString(enum DevFmtChannels chans) DECL_CONST;
 
-#define HRIR_BITS        (7)
-#define HRIR_LENGTH      (1<<HRIR_BITS)
-#define HRIR_MASK        (HRIR_LENGTH-1)
-#define HRTFDELAY_BITS    (20)
-#define HRTFDELAY_FRACONE (1<<HRTFDELAY_BITS)
-#define HRTFDELAY_MASK    (HRTFDELAY_FRACONE-1)
-const struct Hrtf *GetHrtf(ALCdevice *device);
-void FreeHrtfs(void);
-ALuint GetHrtfIrSize (const struct Hrtf *Hrtf);
-ALfloat CalcHrtfDelta(ALfloat oldGain, ALfloat newGain, const ALfloat olddir[3], const ALfloat newdir[3]);
-void GetLerpedHrtfCoeffs(const struct Hrtf *Hrtf, ALfloat elevation, ALfloat azimuth, ALfloat gain, ALfloat (*coeffs)[2], ALuint *delays);
-ALuint GetMovingHrtfCoeffs(const struct Hrtf *Hrtf, ALfloat elevation, ALfloat azimuth, ALfloat gain, ALfloat delta, ALint counter, ALfloat (*coeffs)[2], ALuint *delays, ALfloat (*coeffStep)[2], ALint *delayStep);
-
-void al_print(const char *type, const char *func, const char *fmt, ...) PRINTF_STYLE(3,4);
-#define AL_PRINT(T, ...) al_print((T), __FUNCTION__, __VA_ARGS__)
+/**
+ * GetChannelIdxByName
+ *
+ * Returns the index for the given channel name (e.g. FrontCenter), or -1 if it
+ * doesn't exist.
+ */
+inline ALint GetChannelIndex(const enum Channel names[MAX_OUTPUT_CHANNELS], enum Channel chan)
+{
+    ALint i;
+    for(i = 0;i < MAX_OUTPUT_CHANNELS;i++)
+    {
+        if(names[i] == chan)
+            return i;
+    }
+    return -1;
+}
+#define GetChannelIdxByName(x, c) GetChannelIndex((x).ChannelName, (c))
 
 extern FILE *LogFile;
+
+#if defined(__GNUC__) && !defined(_WIN32) && !defined(IN_IDE_PARSER)
+#define AL_PRINT(T, MSG, ...) fprintf(LogFile, "AL lib: %s %s: "MSG, T, __FUNCTION__ , ## __VA_ARGS__)
+#else
+void al_print(const char *type, const char *func, const char *fmt, ...) DECL_FORMAT(printf, 3,4);
+#define AL_PRINT(T, ...) al_print((T), __FUNCTION__, __VA_ARGS__)
+#endif
+
 enum LogLevel {
     NoLog,
     LogError,
@@ -825,57 +889,20 @@ extern ALint RTPrioLevel;
 extern ALuint CPUCapFlags;
 enum {
     CPU_CAP_SSE    = 1<<0,
-    CPU_CAP_NEON   = 1<<1,
+    CPU_CAP_SSE2   = 1<<1,
+    CPU_CAP_SSE3   = 1<<2,
+    CPU_CAP_SSE4_1 = 1<<3,
+    CPU_CAP_NEON   = 1<<4,
 };
 
 void FillCPUCaps(ALuint capfilter);
 
+vector_al_string SearchDataFiles(const char *match, const char *subdir);
 
-/**
- * Starts a try block. Must not be nested within another try block within the
- * same function.
- */
-#define al_try do {                                                           \
-    int _al_err=0;                                                            \
-_al_try_label:                                                                \
-    if(_al_err == 0)
-/**
- * After a try or another catch block, runs the next block if the given value
- * was thrown.
- */
-#define al_catch(val) else if(_al_err == (val))
-/**
- * After a try or catch block, runs the next block for any value thrown and not
- * caught.
- */
-#define al_catchany() else
-/** Marks the end of the final catch (or the try) block. */
-#define al_endtry } while(0)
+/* Small hack to use a pointer-to-array type as a normal argument type.
+ * Shouldn't be used directly. */
+typedef ALfloat ALfloatBUFFERSIZE[BUFFERSIZE];
 
-/**
- * The given integer value is "thrown" so as to be caught by a catch block.
- * Must be called in a try block within the same function. The value must not
- * be 0.
- */
-#define al_throw(e) do {                                                      \
-    _al_err = (e);                                                            \
-    assert(_al_err != 0);                                                     \
-    goto _al_try_label;                                                       \
-} while(0)
-/** Sets an AL error on the given context, before throwing the error code. */
-#define al_throwerr(ctx, err) do {                                            \
-    alSetError((ctx), (err));                                                 \
-    al_throw((err));                                                          \
-} while(0)
-
-/**
- * Throws an AL_INVALID_VALUE error with the given ctx if the given condition
- * is false.
- */
-#define CHECK_VALUE(ctx, cond) do {                                           \
-    if(!(cond))                                                               \
-        al_throwerr((ctx), AL_INVALID_VALUE);                                 \
-} while(0)
 
 #ifdef __cplusplus
 }
